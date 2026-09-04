@@ -1,0 +1,41 @@
+# Dependency directories
+node_modules/
+server/node_modules/
+client/node_modules/
+
+# SQLite Database files
+*.db
+*.db-wal
+*.db-shm
+server/*.db
+server/*.db-wal
+server/*.db-shm
+
+# Environment & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+server/.env
+client/.env
+
+# Uploaded Media & Files (ignore contents except .gitkeep)
+server/uploads/*
+!server/uploads/.gitkeep
+
+# Build artifacts
+client/dist/
+dist/
+
+# Logs & Temporary files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.system_generated/
+scratch/
+
+# OS System Files
+.DS_Store
+Thumbs.db
