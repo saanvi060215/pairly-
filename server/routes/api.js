@@ -15,6 +15,12 @@ function generateSecureToken() {
   return crypto.randomBytes(5).toString('hex'); // 10 hex characters e.g. '7Kx92LmQ'
 }
 
+function getShareUrl(req, token) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'solofiy.netlify.app';
+  const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
+  return `${proto}://${host}/p/${token}`;
+}
+
 export function getPrimaryLanIp() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -79,8 +85,7 @@ router.post('/setup', async (req, res) => {
     );
 
     const conversation = await queryGet('SELECT * FROM conversations WHERE id = ?', [conversationId]);
-    const lanIp = getPrimaryLanIp();
-    const port = process.env.PORT || 5000;
+    const shareUrl = getShareUrl(req, tokenB);
 
     return res.json({
       conversation,
@@ -90,7 +95,8 @@ router.post('/setup', async (req, res) => {
       partnerToken: tokenB,
       myUrl: `/p/${tokenA}`,
       partnerUrl: `/p/${tokenB}`,
-      lanShareUrl: `http://${lanIp}:${port}/p/${tokenB}`
+      shareUrl,
+      lanShareUrl: shareUrl
     });
   } catch (err) {
     console.error('Setup endpoint error:', err);
@@ -113,10 +119,9 @@ router.get('/p/:token', async (req, res) => {
 
     const user1 = await queryGet('SELECT id, name, avatar, is_online, last_seen FROM users WHERE id = ?', [conversation.user1_id]);
     const user2 = conversation.user2_id ? await queryGet('SELECT id, name, avatar, is_online, last_seen FROM users WHERE id = ?', [conversation.user2_id]) : null;
-    const lanIp = getPrimaryLanIp();
-    const port = process.env.PORT || 5000;
 
     const shareToken = (token === conversation.token_a) ? conversation.token_b : conversation.token_a;
+    const shareUrl = getShareUrl(req, shareToken);
 
     return res.json({
       conversation,
@@ -124,7 +129,8 @@ router.get('/p/:token', async (req, res) => {
       user2,
       participantCount: user2 ? 2 : 1,
       shareToken,
-      lanShareUrl: `http://${lanIp}:${port}/p/${shareToken}`
+      shareUrl,
+      lanShareUrl: shareUrl
     });
   } catch (err) {
     console.error('Resolve token error:', err);
@@ -181,9 +187,8 @@ router.post('/p/:token/join', async (req, res) => {
     }
 
     const updatedConversation = await queryGet('SELECT * FROM conversations WHERE id = ?', [conversation.id]);
-    const lanIp = getPrimaryLanIp();
-    const port = process.env.PORT || 5000;
     const shareToken = (token === updatedConversation.token_a) ? updatedConversation.token_b : updatedConversation.token_a;
+    const shareUrl = getShareUrl(req, shareToken);
 
     // Trigger presence update event
     triggerEvent(`private-conversation-${conversation.id}`, 'user_presence', {
