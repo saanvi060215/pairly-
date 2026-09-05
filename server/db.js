@@ -14,7 +14,6 @@ if (isTursoConfigured) {
   }
 }
 
-// Global process singleton to preserve memory state across warm serverless invocations
 if (!global.__pairly_memory_store) {
   global.__pairly_memory_store = {
     users: new Map(),
@@ -30,6 +29,14 @@ const memoryStore = global.__pairly_memory_store;
 const REST_STORE_ID = process.env.REST_STORE_ID || 'ff808181a067127101a071ba10941987';
 const REST_API_URL = `https://api.restful-api.dev/objects/${REST_STORE_ID}`;
 
+function mapToObject(map) {
+  const obj = {};
+  for (const [k, v] of map.entries()) {
+    obj[k] = v;
+  }
+  return obj;
+}
+
 async function loadMemoryFromCloud() {
   if (cloudClient) return;
   try {
@@ -37,15 +44,17 @@ async function loadMemoryFromCloud() {
     if (res.ok) {
       const obj = await res.json();
       const data = obj.data || {};
-      if (Array.isArray(data.users)) {
-        for (const [id, user] of data.users) {
+      
+      if (data.users && typeof data.users === 'object') {
+        for (const [id, user] of Object.entries(data.users)) {
           if (!memoryStore.users.has(id)) {
             memoryStore.users.set(id, user);
           }
         }
       }
-      if (Array.isArray(data.conversations)) {
-        for (const [id, conv] of data.conversations) {
+
+      if (data.conversations && typeof data.conversations === 'object') {
+        for (const [id, conv] of Object.entries(data.conversations)) {
           if (!memoryStore.conversations.has(id)) {
             memoryStore.conversations.set(id, conv);
           } else {
@@ -56,6 +65,7 @@ async function loadMemoryFromCloud() {
           }
         }
       }
+
       if (Array.isArray(data.messages)) {
         const existingIds = new Set(memoryStore.messages.map(m => m.id));
         for (const m of data.messages) {
@@ -91,8 +101,8 @@ async function saveMemoryToCloud(retries = 2) {
   const payload = {
     name: 'pairly_global_store_v1',
     data: {
-      users: Array.from(memoryStore.users.entries()),
-      conversations: Array.from(memoryStore.conversations.entries()),
+      users: mapToObject(memoryStore.users),
+      conversations: mapToObject(memoryStore.conversations),
       messages: memoryStore.messages,
       reactions: memoryStore.reactions,
       pinned: memoryStore.pinned,
@@ -108,9 +118,9 @@ async function saveMemoryToCloud(retries = 2) {
         body: JSON.stringify(payload)
       });
       if (res.ok) break;
-      if (attempt < retries) await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+      if (attempt < retries) await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
     } catch (err) {
-      if (attempt < retries) await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+      if (attempt < retries) await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
     }
   }
 }
@@ -460,7 +470,7 @@ export async function initDb() {
     await loadMemoryFromCloud();
   }
 
-  console.log('Pairly Database initialized (Turso HTTP Client / Global Persistent REST Cloud Store).');
+  console.log('Pairly Database initialized (Turso HTTP Client / Standard JSON Cloud Store).');
 }
 
 export default {
