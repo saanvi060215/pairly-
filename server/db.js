@@ -14,15 +14,19 @@ if (isTursoConfigured) {
   }
 }
 
-let memoryStore = {
-  users: new Map(),
-  conversations: new Map(),
-  messages: [],
-  reactions: [],
-  pinned: [],
-  links: []
-};
+// Global process singleton to preserve memory state across warm serverless invocations
+if (!global.__pairly_memory_store) {
+  global.__pairly_memory_store = {
+    users: new Map(),
+    conversations: new Map(),
+    messages: [],
+    reactions: [],
+    pinned: [],
+    links: []
+  };
+}
 
+const memoryStore = global.__pairly_memory_store;
 const REST_STORE_ID = process.env.REST_STORE_ID || 'ff808181a067127101a071ba10941987';
 const REST_API_URL = `https://api.restful-api.dev/objects/${REST_STORE_ID}`;
 
@@ -45,7 +49,6 @@ async function loadMemoryFromCloud() {
           if (!memoryStore.conversations.has(id)) {
             memoryStore.conversations.set(id, conv);
           } else {
-            // Merge updated user2_id if linked by another instance
             const existing = memoryStore.conversations.get(id);
             if (conv.user2_id && !existing.user2_id) {
               existing.user2_id = conv.user2_id;
@@ -83,27 +86,32 @@ async function loadMemoryFromCloud() {
   }
 }
 
-async function saveMemoryToCloud() {
+async function saveMemoryToCloud(retries = 2) {
   if (cloudClient) return;
-  try {
-    const payload = {
-      name: 'pairly_global_store_v1',
-      data: {
-        users: Array.from(memoryStore.users.entries()),
-        conversations: Array.from(memoryStore.conversations.entries()),
-        messages: memoryStore.messages,
-        reactions: memoryStore.reactions,
-        pinned: memoryStore.pinned,
-        links: memoryStore.links
-      }
-    };
-    await fetch(REST_API_URL, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-  } catch (err) {
-    console.warn('Failed to save cloud state:', err.message);
+  const payload = {
+    name: 'pairly_global_store_v1',
+    data: {
+      users: Array.from(memoryStore.users.entries()),
+      conversations: Array.from(memoryStore.conversations.entries()),
+      messages: memoryStore.messages,
+      reactions: memoryStore.reactions,
+      pinned: memoryStore.pinned,
+      links: memoryStore.links
+    }
+  };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(REST_API_URL, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) break;
+      if (attempt < retries) await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+    } catch (err) {
+      if (attempt < retries) await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+    }
   }
 }
 
@@ -452,7 +460,7 @@ export async function initDb() {
     await loadMemoryFromCloud();
   }
 
-  console.log('Pairly Database initialized (Turso HTTP Client / Merged Persistent REST Cloud Store).');
+  console.log('Pairly Database initialized (Turso HTTP Client / Global Persistent REST Cloud Store).');
 }
 
 export default {
