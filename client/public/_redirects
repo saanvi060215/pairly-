@@ -1,4 +1,3 @@
-/api/setup /.netlify/functions/setup 200!
-/api/p/:token /.netlify/functions/resolve 200!
 /api/* /.netlify/functions/api/:splat 200!
 /* /index.html 200
+

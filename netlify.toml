@@ -8,18 +8,6 @@
   external_node_modules = ["@libsql/linux-x64-gnu", "@libsql/darwin-x64", "@libsql/win32-x64-msvc", "better-sqlite3"]
 
 [[redirects]]
-  from = "/api/setup"
-  to = "/.netlify/functions/setup"
-  status = 200
-  force = true
-
-[[redirects]]
-  from = "/api/p/:token"
-  to = "/.netlify/functions/resolve"
-  status = 200
-  force = true
-
-[[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
   status = 200
@@ -29,3 +17,4 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
