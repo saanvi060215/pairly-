@@ -1,5 +1,4 @@
 import { createClient } from '@libsql/client';
-import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -14,15 +13,29 @@ const isTursoConfigured = Boolean(process.env.TURSO_DATABASE_URL);
 
 if (isTursoConfigured) {
   console.log('Connecting to Turso Cloud SQLite Database...');
-  cloudClient = createClient({
-    url: process.env.TURSO_DATABASE_URL,
-    authToken: process.env.TURSO_AUTH_TOKEN || ''
-  });
-} else {
-  console.log('Connecting to Local SQLite Database fallback...');
-  const dbPath = path.join(__dirname, 'pairly.db');
-  localDb = new Database(dbPath);
-  localDb.pragma('journal_mode = WAL');
+  try {
+    cloudClient = createClient({
+      url: process.env.TURSO_DATABASE_URL,
+      authToken: process.env.TURSO_AUTH_TOKEN || ''
+    });
+  } catch (err) {
+    console.error('Failed to initialize Turso client:', err);
+  }
+}
+
+async function getLocalDb() {
+  if (!localDb && !cloudClient) {
+    try {
+      const DatabaseModule = await import('better-sqlite3');
+      const Database = DatabaseModule.default;
+      const dbPath = path.join('/tmp', 'pairly.db');
+      localDb = new Database(dbPath);
+      localDb.pragma('journal_mode = WAL');
+    } catch (err) {
+      console.warn('better-sqlite3 native binding unavailable:', err.message);
+    }
+  }
+  return localDb;
 }
 
 export async function queryGet(sql, params = []) {
@@ -33,7 +46,11 @@ export async function queryGet(sql, params = []) {
     }
     return null;
   } else {
-    return localDb.prepare(sql).get(...params) || null;
+    const ldb = await getLocalDb();
+    if (ldb) {
+      return ldb.prepare(sql).get(...params) || null;
+    }
+    return null;
   }
 }
 
@@ -42,7 +59,11 @@ export async function queryAll(sql, params = []) {
     const res = await cloudClient.execute({ sql, args: params });
     return res.rows || [];
   } else {
-    return localDb.prepare(sql).all(...params) || [];
+    const ldb = await getLocalDb();
+    if (ldb) {
+      return ldb.prepare(sql).all(...params) || [];
+    }
+    return [];
   }
 }
 
@@ -51,8 +72,12 @@ export async function queryRun(sql, params = []) {
     const res = await cloudClient.execute({ sql, args: params });
     return { changes: Number(res.rowsAffected) };
   } else {
-    const info = localDb.prepare(sql).run(...params);
-    return { changes: info.changes };
+    const ldb = await getLocalDb();
+    if (ldb) {
+      const info = ldb.prepare(sql).run(...params);
+      return { changes: info.changes };
+    }
+    return { changes: 0 };
   }
 }
 
@@ -135,7 +160,7 @@ export async function initDb() {
     await queryRun(q);
   }
 
-  console.log('Pairly Database initialized (Turso/Local compatible).');
+  console.log('Pairly Database initialized safely.');
 }
 
 export default {

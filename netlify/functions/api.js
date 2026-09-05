@@ -25,8 +25,13 @@ app.use(async (req, res, next) => {
   next();
 });
 
-app.use('/api', apiRoutes);
-app.use('/api', urlScraperRoutes);
-app.use('/api', uploadRoutes);
+const router = express.Router();
+router.use('/', apiRoutes);
+router.use('/', urlScraperRoutes);
+router.use('/', uploadRoutes);
+
+app.use('/.netlify/functions/api', router);
+app.use('/api', router);
+app.use('/', router);
 
 export const handler = serverless(app);
