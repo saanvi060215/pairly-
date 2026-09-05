@@ -100,7 +100,7 @@ router.post('/setup', async (req, res) => {
     });
   } catch (err) {
     console.error('Setup endpoint error:', err);
-    return res.status(500).json({ error: 'Failed to setup private conversation space' });
+    return res.status(500).json({ error: 'Failed to setup private conversation space', details: err.message });
   }
 });
 
