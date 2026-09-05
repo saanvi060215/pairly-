@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { io } from 'socket.io-client';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import Pusher from 'pusher-js';
 import ChatHeader from './ChatHeader.jsx';
 import MessageList from './MessageList.jsx';
 import MessageComposer from './MessageComposer.jsx';
@@ -42,10 +42,8 @@ export default function ChatContainer({
   const [typingUser, setTypingUser] = useState(null);
   const [replyTarget, setReplyTarget] = useState(null);
   const [isConnected, setIsConnected] = useState(true);
-  const [socket, setSocket] = useState(null);
 
   const { playChime } = useAudio();
-
   const API_BASE = import.meta.env.VITE_API_URL || '';
 
   // Fetch Conversation Data
@@ -85,188 +83,327 @@ export default function ChatContainer({
     }
   }, [pairToken, userToken, API_BASE]);
 
+  // Real-Time Pusher Connection Setup
   useEffect(() => {
     fetchConversationData();
 
-    const socketUrl = import.meta.env.VITE_API_URL || undefined;
-    const socketIo = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000
-    });
+    const pusherKey = import.meta.env.VITE_PUSHER_KEY;
+    const pusherCluster = import.meta.env.VITE_PUSHER_CLUSTER || 'us2';
 
-    socketIo.on('connect', () => {
-      setIsConnected(true);
-      socketIo.emit('join_conversation', { pairToken, userToken }, (res) => {
-        if (res && res.conversation) {
-          setConversation(res.conversation);
+    let pusher = null;
+    let channel = null;
+
+    if (pusherKey && conversation?.id) {
+      try {
+        pusher = new Pusher(pusherKey, {
+          cluster: pusherCluster,
+          authEndpoint: `${API_BASE}/api/pusher/auth`,
+          auth: {
+            headers: {
+              'x-pair-token': pairToken,
+              'x-user-token': userToken
+            }
+          }
+        });
+
+        pusher.connection.bind('connected', () => setIsConnected(true));
+        pusher.connection.bind('disconnected', () => setIsConnected(false));
+        pusher.connection.bind('error', () => setIsConnected(false));
+
+        channel = pusher.subscribe(`private-conversation-${conversation.id}`);
+
+        channel.bind('new_message', (newMsg) => {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [...prev, newMsg];
+          });
+
+          if (newMsg.sender_id !== currentUser.id) {
+            playChime();
+            fetch(`${API_BASE}/api/p/${pairToken}/mark-read`, {
+              method: 'POST',
+              headers: { 'x-pair-token': pairToken, 'x-user-token': userToken }
+            }).catch(() => {});
+          }
+
+          if (newMsg.metadata && newMsg.metadata.url) {
+            setSharedLinks((prev) => [
+              {
+                id: newMsg.id,
+                url: newMsg.metadata.url,
+                title: newMsg.metadata.title,
+                description: newMsg.metadata.description,
+                domain: newMsg.metadata.domain,
+                shared_by_name: newMsg.sender_name,
+                created_at: newMsg.created_at
+              },
+              ...prev
+            ]);
+          }
+
+          if (newMsg.type === 'image' || newMsg.type === 'file') {
+            setMediaFiles((prev) => [newMsg, ...prev]);
+          }
+        });
+
+        channel.bind('chat_cleared', () => {
+          setMessages([]);
+          setSharedLinks([]);
+          setPinnedMessages([]);
+          setMediaFiles([]);
+          setActiveUrl('');
+          setActiveTitle('');
+        });
+
+        channel.bind('user_presence', ({ userId, isOnline, lastSeen }) => {
+          setPartner((prev) =>
+            prev && prev.id === userId ? { ...prev, is_online: isOnline ? 1 : 0, last_seen: lastSeen } : prev
+          );
+        });
+
+        channel.bind('user_typing', ({ userId, userName, isTyping }) => {
+          if (userId !== currentUser.id) {
+            setTypingUser(isTyping ? { userId, userName } : null);
+          }
+        });
+
+        channel.bind('messages_read', ({ readByUserId, readAt }) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.sender_id === currentUser.id ? { ...m, is_read: 1, read_at: readAt } : m))
+          );
+        });
+
+        channel.bind('reaction_updated', ({ messageId, reactions }) => {
+          setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions } : m)));
+        });
+
+        channel.bind('pin_updated', ({ messageId, isPinned }) => {
+          setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, isPinned } : m)));
           fetchConversationData();
-        }
-      });
-    });
+        });
 
-    socketIo.on('disconnect', () => {
-      setIsConnected(false);
-    });
+        channel.bind('message_edited', ({ messageId, newContent }) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === messageId ? { ...m, content: newContent, is_edited: 1 } : m))
+          );
+        });
 
-    // Real-time Socket Events
-    socketIo.on('new_message', (newMsg) => {
-      setMessages((prev) => [...prev, newMsg]);
+        channel.bind('message_deleted', ({ messageId }) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId ? { ...m, is_deleted: 1, content: 'This message was deleted' } : m
+            )
+          );
+        });
 
-      if (newMsg.sender_id !== currentUser.id) {
-        playChime();
-        socketIo.emit('mark_read', { messageId: newMsg.id });
+        channel.bind('active_link_changed', ({ url, title }) => {
+          setActiveUrl(url);
+          setActiveTitle(title);
+          setShowCollaborative(true);
+        });
+      } catch (err) {
+        console.error('Pusher setup error:', err);
       }
+    }
 
-      if (newMsg.metadata && newMsg.metadata.url) {
-        setSharedLinks((prev) => [
-          {
-            id: newMsg.id,
-            url: newMsg.metadata.url,
-            title: newMsg.metadata.title,
-            description: newMsg.metadata.description,
-            domain: newMsg.metadata.domain,
-            shared_by_name: newMsg.sender_name,
-            created_at: newMsg.created_at
-          },
-          ...prev
-        ]);
-      }
-
-      if (newMsg.type === 'image' || newMsg.type === 'file') {
-        setMediaFiles((prev) => [newMsg, ...prev]);
-      }
-    });
-
-    socketIo.on('chat_cleared', () => {
-      setMessages([]);
-      setSharedLinks([]);
-      setPinnedMessages([]);
-      setMediaFiles([]);
-      setActiveUrl('');
-      setActiveTitle('');
-    });
-
-    socketIo.on('user_presence', ({ userId, isOnline, lastSeen }) => {
-      setPartner((prev) =>
-        prev && prev.id === userId ? { ...prev, is_online: isOnline ? 1 : 0, last_seen: lastSeen } : prev
-      );
-    });
-
-    socketIo.on('user_typing', ({ userId, userName, isTyping }) => {
-      if (userId !== currentUser.id) {
-        setTypingUser(isTyping ? { userId, userName } : null);
-      }
-    });
-
-    socketIo.on('messages_read', ({ readByUserId, readAt }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.sender_id === currentUser.id ? { ...m, is_read: 1, read_at: readAt } : m
-        )
-      );
-    });
-
-    socketIo.on('reaction_updated', ({ messageId, reactions }) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
-      );
-    });
-
-    socketIo.on('pin_updated', ({ messageId, isPinned }) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, isPinned } : m))
-      );
+    // Polling Fallback (5 seconds interval for robust syncing)
+    const pollInterval = setInterval(() => {
       fetchConversationData();
-    });
-
-    socketIo.on('message_edited', ({ messageId, newContent }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId ? { ...m, content: newContent, is_edited: 1 } : m
-        )
-      );
-    });
-
-    socketIo.on('message_deleted', ({ messageId }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? { ...m, is_deleted: 1, content: 'This message was deleted' }
-            : m
-        )
-      );
-    });
-
-    socketIo.on('active_link_changed', ({ url, title }) => {
-      setActiveUrl(url);
-      setActiveTitle(title);
-      setShowCollaborative(true);
-    });
-
-    setSocket(socketIo);
+    }, 5000);
 
     return () => {
-      socketIo.disconnect();
+      clearInterval(pollInterval);
+      if (channel) channel.unbind_all();
+      if (pusher) pusher.disconnect();
     };
-  }, [pairToken, userToken, currentUser.id, fetchConversationData, playChime]);
+  }, [pairToken, userToken, conversation?.id, currentUser.id, fetchConversationData, playChime, API_BASE]);
 
+  // Presence Heartbeat
   useEffect(() => {
-    const handleFocus = () => {
-      if (socket && messages.length > 0) {
-        const unread = messages.find(m => m.sender_id !== currentUser.id && !m.is_read);
-        if (unread) {
-          socket.emit('mark_read', { messageId: unread.id });
+    const sendPresence = (isOnline) => {
+      fetch(`${API_BASE}/api/p/${pairToken}/presence`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify({ isOnline })
+      }).catch(() => {});
+    };
+
+    sendPresence(true);
+    const heartbeat = setInterval(() => sendPresence(true), 30000);
+
+    return () => {
+      clearInterval(heartbeat);
+      sendPresence(false);
+    };
+  }, [pairToken, userToken, API_BASE]);
+
+  const handleSendMessage = async (msgPayload) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/p/${pairToken}/send-message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify(msgPayload)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.message) {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === data.message.id)) return prev;
+            return [...prev, data.message];
+          });
         }
       }
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [socket, messages, currentUser.id]);
-
-  const handleSendMessage = (msgPayload) => {
-    if (socket) socket.emit('send_message', msgPayload);
+    } catch (err) {
+      console.error('Send message fetch error:', err);
+    }
   };
 
   const handleTypingStart = () => {
-    if (socket) socket.emit('typing_start');
+    fetch(`${API_BASE}/api/p/${pairToken}/typing`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-pair-token': pairToken,
+        'x-user-token': userToken
+      },
+      body: JSON.stringify({ isTyping: true })
+    }).catch(() => {});
   };
 
   const handleTypingStop = () => {
-    if (socket) socket.emit('typing_stop');
+    fetch(`${API_BASE}/api/p/${pairToken}/typing`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-pair-token': pairToken,
+        'x-user-token': userToken
+      },
+      body: JSON.stringify({ isTyping: false })
+    }).catch(() => {});
   };
 
-  const handleToggleReaction = (messageId, emoji) => {
-    if (socket) socket.emit('toggle_reaction', { messageId, emoji });
+  const handleToggleReaction = async (messageId, emoji) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/p/${pairToken}/reaction`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify({ messageId, emoji })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.reactions) {
+          setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions: data.reactions } : m)));
+        }
+      }
+    } catch (err) {
+      console.error('Reaction error:', err);
+    }
   };
 
-  const handleTogglePin = (messageId) => {
-    if (socket) socket.emit('toggle_pin', { messageId });
+  const handleTogglePin = async (messageId) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/p/${pairToken}/pin`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify({ messageId })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, isPinned: data.isPinned } : m)));
+        fetchConversationData();
+      }
+    } catch (err) {
+      console.error('Pin error:', err);
+    }
   };
 
-  const handleEditMessage = (messageId, newContent) => {
-    if (socket) socket.emit('edit_message', { messageId, newContent });
+  const handleEditMessage = async (messageId, newContent) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/p/${pairToken}/edit-message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify({ messageId, newContent })
+      });
+      if (res.ok) {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, content: newContent, is_edited: 1 } : m))
+        );
+      }
+    } catch (err) {
+      console.error('Edit error:', err);
+    }
   };
 
-  const handleDeleteMessage = (messageId) => {
-    if (socket) socket.emit('delete_message', { messageId });
+  const handleDeleteMessage = async (messageId) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/p/${pairToken}/delete-message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify({ messageId })
+      });
+      if (res.ok) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId ? { ...m, is_deleted: 1, content: 'This message was deleted' } : m
+          )
+        );
+      }
+    } catch (err) {
+      console.error('Delete error:', err);
+    }
   };
 
-  const handleSetActiveLink = (url, title) => {
+  const handleSetActiveLink = async (url, title) => {
     setActiveUrl(url);
     setActiveTitle(title || url);
     setShowCollaborative(true);
-    if (socket) socket.emit('set_active_link', { url, title: title || url });
+    try {
+      await fetch(`${API_BASE}/api/p/${pairToken}/active-link`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        },
+        body: JSON.stringify({ url, title: title || url })
+      });
+    } catch (err) {
+      console.error('Set active link error:', err);
+    }
   };
 
-  // Smart LAN-Aware Copy Private Link Generator for /p/:token
+  // Smart LAN-Aware & Production Copy Private Link Generator for /p/:token
   const handleCopyPrivateLink = async () => {
     const tokenToCopy = shareToken || pairToken;
     let shareUrl = `${window.location.origin}/p/${tokenToCopy}`;
 
     if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
       try {
-        const res = await fetch('/api/system/lan-info');
+        const res = await fetch(`${API_BASE}/api/system/lan-info`);
         if (res.ok) {
           const info = await res.json();
           if (info.lanIp && info.lanIp !== '127.0.0.1') {
@@ -284,17 +421,19 @@ export default function ChatContainer({
   const handleConfirmClearChat = async () => {
     setClearing(true);
     try {
-      if (socket) {
-        socket.emit('clear_chat');
-      } else {
-        await fetch(`/api/p/${pairToken}/clear`, {
-          method: 'POST',
-          headers: {
-            'x-pair-token': pairToken,
-            'x-user-token': userToken
-          }
-        });
-      }
+      await fetch(`${API_BASE}/api/p/${pairToken}/clear`, {
+        method: 'POST',
+        headers: {
+          'x-pair-token': pairToken,
+          'x-user-token': userToken
+        }
+      });
+      setMessages([]);
+      setSharedLinks([]);
+      setPinnedMessages([]);
+      setMediaFiles([]);
+      setActiveUrl('');
+      setActiveTitle('');
       setShowClearModal(false);
     } catch (e) {
       console.error('Clear chat error:', e);
@@ -349,16 +488,13 @@ export default function ChatContainer({
           <MessageList
             messages={messages}
             currentUser={currentUser}
-            typingUser={typingUser}
-            pinnedMessages={pinnedMessages}
-            onReply={(msg) => setReplyTarget(msg)}
             onToggleReaction={handleToggleReaction}
             onTogglePin={handleTogglePin}
-            onEdit={handleEditMessage}
-            onDelete={handleDeleteMessage}
+            onEditMessage={handleEditMessage}
+            onDeleteMessage={handleDeleteMessage}
+            onReplyMessage={(msg) => setReplyTarget(msg)}
             onOpenLightbox={handleOpenLightbox}
-            onOpenInCollaborative={handleOpenInCollaborative}
-            onCopyPersonalLink={handleCopyPrivateLink}
+            onOpenCollaborative={handleOpenInCollaborative}
           />
 
           <MessageComposer
@@ -373,44 +509,31 @@ export default function ChatContainer({
         </div>
 
         {showCollaborative && (
-          <div className="w-full md:w-1/2 lg:w-3/5 h-full relative transition-all duration-300">
-            <CollaborativeView
-              activeUrl={activeUrl}
-              activeTitle={activeTitle}
-              onClose={() => setShowCollaborative(false)}
-              onSetActiveLink={handleSetActiveLink}
-              sharedLinks={sharedLinks}
-            />
-          </div>
+          <CollaborativeView
+            url={activeUrl}
+            title={activeTitle}
+            onClose={() => setShowCollaborative(false)}
+            onUrlChange={handleSetActiveLink}
+          />
         )}
 
         {showSidebar && (
           <RightSidebar
-            connection={conversation}
             partner={partner}
             sharedLinks={sharedLinks}
-            mediaFiles={mediaFiles}
             pinnedMessages={pinnedMessages}
+            mediaFiles={mediaFiles}
             onClose={() => setShowSidebar(false)}
-            onOpenInCollaborative={handleOpenInCollaborative}
+            onOpenCollaborative={handleOpenInCollaborative}
             onOpenLightbox={handleOpenLightbox}
-            onTogglePin={handleTogglePin}
-            onCopyPersonalLink={handleCopyPrivateLink}
-            onDisconnect={() => setShowClearModal(true)}
+            onUnpinMessage={handleTogglePin}
           />
         )}
       </div>
 
-      {lightboxImage && (
-        <LightboxModal
-          imageObj={lightboxImage}
-          onClose={() => setLightboxImage(null)}
-        />
-      )}
-
       {showSearch && (
         <SearchModal
-          connectionId={pairToken}
+          pairToken={pairToken}
           userToken={userToken}
           onClose={() => setShowSearch(false)}
           onSelectMessage={handleSelectSearchedMessage}
@@ -419,10 +542,16 @@ export default function ChatContainer({
 
       {showClearModal && (
         <ClearChatModal
-          isOpen={showClearModal}
           onClose={() => setShowClearModal(false)}
-          onConfirmClear={handleConfirmClearChat}
-          loading={clearing}
+          onConfirm={handleConfirmClearChat}
+          clearing={clearing}
+        />
+      )}
+
+      {lightboxImage && (
+        <LightboxModal
+          image={lightboxImage}
+          onClose={() => setLightboxImage(null)}
         />
       )}
     </div>

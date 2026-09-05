@@ -11,5 +11,11 @@
     "install:all": "npm --prefix server install && npm --prefix client install",
     "dev:server": "node --watch server/index.js",
     "dev:client": "npm --prefix client run dev"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0",
+    "cloudinary": "^2.11.0",
+    "pusher": "^5.3.4",
+    "serverless-http": "^4.0.0"
   }
 }

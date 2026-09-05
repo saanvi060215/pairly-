@@ -1,3 +1,4 @@
+import { createClient } from '@libsql/client';
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -6,21 +7,58 @@ import fs from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPath = path.join(__dirname, 'pairly.db');
+let cloudClient = null;
+let localDb = null;
 
-// Reset db for dual token schema
-if (fs.existsSync(dbPath)) {
-  try {
-    fs.unlinkSync(dbPath);
-  } catch (e) {}
+const isTursoConfigured = Boolean(process.env.TURSO_DATABASE_URL);
+
+if (isTursoConfigured) {
+  console.log('Connecting to Turso Cloud SQLite Database...');
+  cloudClient = createClient({
+    url: process.env.TURSO_DATABASE_URL,
+    authToken: process.env.TURSO_AUTH_TOKEN || ''
+  });
+} else {
+  console.log('Connecting to Local SQLite Database fallback...');
+  const dbPath = path.join(__dirname, 'pairly.db');
+  localDb = new Database(dbPath);
+  localDb.pragma('journal_mode = WAL');
 }
 
-const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
+export async function queryGet(sql, params = []) {
+  if (cloudClient) {
+    const res = await cloudClient.execute({ sql, args: params });
+    if (res.rows && res.rows.length > 0) {
+      return res.rows[0];
+    }
+    return null;
+  } else {
+    return localDb.prepare(sql).get(...params) || null;
+  }
+}
 
-export function initDb() {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
+export async function queryAll(sql, params = []) {
+  if (cloudClient) {
+    const res = await cloudClient.execute({ sql, args: params });
+    return res.rows || [];
+  } else {
+    return localDb.prepare(sql).all(...params) || [];
+  }
+}
+
+export async function queryRun(sql, params = []) {
+  if (cloudClient) {
+    const res = await cloudClient.execute({ sql, args: params });
+    return { changes: Number(res.rowsAffected) };
+  } else {
+    const info = localDb.prepare(sql).run(...params);
+    return { changes: info.changes };
+  }
+}
+
+export async function initDb() {
+  const schemaQueries = [
+    `CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       avatar TEXT NOT NULL,
@@ -29,9 +67,8 @@ export function initDb() {
       last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
       socket_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS conversations (
+    );`,
+    `CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       token_a TEXT UNIQUE NOT NULL,
       token_b TEXT UNIQUE NOT NULL,
@@ -42,9 +79,8 @@ export function initDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(user1_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY(user2_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS messages (
+    );`,
+    `CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
       sender_id TEXT NOT NULL,
@@ -59,9 +95,8 @@ export function initDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
       FOREIGN KEY(sender_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS reactions (
+    );`,
+    `CREATE TABLE IF NOT EXISTS reactions (
       id TEXT PRIMARY KEY,
       message_id TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -70,9 +105,8 @@ export function initDb() {
       UNIQUE(message_id, user_id, emoji),
       FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS pinned_messages (
+    );`,
+    `CREATE TABLE IF NOT EXISTS pinned_messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
@@ -81,9 +115,8 @@ export function initDb() {
       UNIQUE(conversation_id, message_id),
       FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
       FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS shared_links (
+    );`,
+    `CREATE TABLE IF NOT EXISTS shared_links (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
       url TEXT NOT NULL,
@@ -95,10 +128,19 @@ export function initDb() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
       FOREIGN KEY(shared_by) REFERENCES users(id) ON DELETE CASCADE
-    );
-  `);
+    );`
+  ];
 
-  console.log('Pairly Database initialized with dual permanent /p/:token constraints.');
+  for (const q of schemaQueries) {
+    await queryRun(q);
+  }
+
+  console.log('Pairly Database initialized (Turso/Local compatible).');
 }
 
-export default db;
+export default {
+  queryGet,
+  queryAll,
+  queryRun,
+  initDb
+};
