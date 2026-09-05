@@ -1,6 +1,17 @@
 import { initDb, queryGet } from '../../server/db.js';
 
 export const handler = async (event) => {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+  };
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
   try {
     await initDb();
     const pathParts = event.path.split('/');
@@ -9,7 +20,7 @@ export const handler = async (event) => {
     if (!token) {
       return {
         statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ error: 'Token is required' })
       };
     }
@@ -22,7 +33,7 @@ export const handler = async (event) => {
     if (!conversation) {
       return {
         statusCode: 404,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ error: 'Private space not found. Please check your link.' })
       };
     }
@@ -37,7 +48,7 @@ export const handler = async (event) => {
 
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         conversation,
         user1,
@@ -52,7 +63,7 @@ export const handler = async (event) => {
     console.error('Resolve function error:', err);
     return {
       statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ error: 'Failed to resolve private space', details: err.message })
     };
   }

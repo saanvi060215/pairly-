@@ -2,23 +2,43 @@ import { initDb, queryGet, queryRun } from '../../server/db.js';
 import crypto from 'crypto';
 
 export const handler = async (event) => {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+  };
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: '' };
+  }
+
   if (event.httpMethod !== 'POST') {
     return {
       statusCode: 405,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ error: 'Method not allowed' })
     };
   }
 
   try {
     await initDb();
-    const body = JSON.parse(event.body || '{}');
+    let body = {};
+    if (typeof event.body === 'string') {
+      try {
+        body = JSON.parse(event.body);
+      } catch (e) {
+        body = {};
+      }
+    } else if (event.body) {
+      body = event.body;
+    }
     const { name, avatar, userToken: existingToken } = body;
 
     if (!name || !name.trim()) {
       return {
         statusCode: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ error: 'Display name is required' })
       };
     }
@@ -60,7 +80,7 @@ export const handler = async (event) => {
 
     return {
       statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         conversation,
         user: { id: user.id, name: user.name, avatar: user.avatar },
@@ -77,7 +97,7 @@ export const handler = async (event) => {
     console.error('Setup function error:', err);
     return {
       statusCode: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ error: 'Failed to setup private space', details: err.message })
     };
   }
