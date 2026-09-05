@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "duosync": "file:..",
     "lucide-react": "^0.475.0",
     "pusher-js": "^8.6.0",
     "react": "^18.3.1",
