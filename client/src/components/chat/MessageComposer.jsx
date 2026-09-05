@@ -51,9 +51,11 @@ export default function MessageComposer({
     const detectedUrl = extractFirstUrl(messageContent);
     let metadata = null;
 
+    const API_BASE = import.meta.env.VITE_API_URL || '';
+
     if (detectedUrl) {
       try {
-        const res = await fetch('/api/url-metadata', {
+        const res = await fetch(`${API_BASE}/api/url-metadata`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -94,6 +96,7 @@ export default function MessageComposer({
   };
 
   const uploadSelectedFile = async (file) => {
+    const API_BASE = import.meta.env.VITE_API_URL || '';
     setUploading(true);
     setUploadProgress(20);
 
@@ -102,7 +105,7 @@ export default function MessageComposer({
       formData.append('file', file);
 
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload');
+      xhr.open('POST', `${API_BASE}/api/upload`);
       xhr.setRequestHeader('x-connection-id', connectionId);
       xhr.setRequestHeader('x-user-token', userToken);
 

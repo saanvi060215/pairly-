@@ -49,20 +49,32 @@ export default function App() {
     setLoading(false);
   }, []);
 
+  const API_BASE = import.meta.env.VITE_API_URL || '';
+
+  // Helper to parse JSON safely
+  const parseJsonResponse = async (res, defaultErrorMsg) => {
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error(
+        'Backend server is not connected. If running locally, access http://localhost:5000 or http://192.168.x.x:5000. If deployed on Netlify, connect a live backend server URL (e.g., Render/Railway).'
+      );
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || defaultErrorMsg);
+    }
+    return data;
+  };
+
   // 1. Initial Setup Profile & Create Permanent Pair Space
   const handleSetupProfile = async ({ name, avatar }) => {
-    const res = await fetch('/api/setup', {
+    const res = await fetch(`${API_BASE}/api/setup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, avatar, userToken })
     });
 
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.error || 'Failed to setup private space');
-    }
-
-    const data = await res.json();
+    const data = await parseJsonResponse(res, 'Failed to setup private space');
     const newSession = {
       user: data.user,
       userToken: data.userToken,
@@ -79,18 +91,13 @@ export default function App() {
 
   // 2. Join Permanent Pair Space via Shared Link (/p/:token)
   const handleJoinPairToken = async ({ token: tokenToJoin, name, avatar }) => {
-    const res = await fetch(`/api/p/${tokenToJoin}/join`, {
+    const res = await fetch(`${API_BASE}/api/p/${tokenToJoin}/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, avatar, userToken })
     });
 
-    if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.error || 'Failed to join private space');
-    }
-
-    const data = await res.json();
+    const data = await parseJsonResponse(res, 'Failed to join private space');
     const newSession = {
       user: data.user,
       userToken: data.userToken,

@@ -46,20 +46,22 @@ export default function ChatContainer({
 
   const { playChime } = useAudio();
 
+  const API_BASE = import.meta.env.VITE_API_URL || '';
+
   // Fetch Conversation Data
   const fetchConversationData = useCallback(async () => {
     try {
       const [msgRes, sharedRes, infoRes] = await Promise.all([
-        fetch(`/api/p/${pairToken}/messages`, {
+        fetch(`${API_BASE}/api/p/${pairToken}/messages`, {
           headers: { 'x-pair-token': pairToken, 'x-user-token': userToken }
         }),
-        fetch(`/api/p/${pairToken}/shared-content`, {
+        fetch(`${API_BASE}/api/p/${pairToken}/shared-content`, {
           headers: { 'x-pair-token': pairToken, 'x-user-token': userToken }
         }),
-        fetch(`/api/p/${pairToken}`)
+        fetch(`${API_BASE}/api/p/${pairToken}`)
       ]);
 
-      if (msgRes.ok) {
+      if (msgRes.ok && msgRes.headers.get('content-type')?.includes('application/json')) {
         const msgData = await msgRes.json();
         setMessages(msgData.messages || []);
         if (msgData.conversation) setConversation(msgData.conversation);
@@ -67,26 +69,27 @@ export default function ChatContainer({
         if (msgData.conversation?.active_link_url) setActiveUrl(msgData.conversation.active_link_url);
       }
 
-      if (sharedRes.ok) {
+      if (sharedRes.ok && sharedRes.headers.get('content-type')?.includes('application/json')) {
         const sharedData = await sharedRes.json();
         setSharedLinks(sharedData.links || []);
         setPinnedMessages(sharedData.pinned || []);
         setMediaFiles(sharedData.media || []);
       }
 
-      if (infoRes.ok) {
+      if (infoRes.ok && infoRes.headers.get('content-type')?.includes('application/json')) {
         const infoData = await infoRes.json();
         if (infoData.shareToken) setShareToken(infoData.shareToken);
       }
     } catch (err) {
       console.error('Failed to fetch conversation data:', err);
     }
-  }, [pairToken, userToken]);
+  }, [pairToken, userToken, API_BASE]);
 
   useEffect(() => {
     fetchConversationData();
 
-    const socketIo = io({
+    const socketUrl = import.meta.env.VITE_API_URL || undefined;
+    const socketIo = io(socketUrl, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 10,
       reconnectionDelay: 1000
