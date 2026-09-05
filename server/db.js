@@ -1,5 +1,7 @@
-import { createClient } from '@libsql/client';
+import { createClient } from '@libsql/client/http';
 import path from 'path';
+import fs from 'fs';
+
 const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
 let cloudClient = null;
@@ -8,14 +10,14 @@ let localDb = null;
 const isTursoConfigured = Boolean(process.env.TURSO_DATABASE_URL);
 
 if (isTursoConfigured) {
-  console.log('Connecting to Turso Cloud SQLite Database...');
+  console.log('Connecting to Turso Cloud SQLite Database (HTTP Serverless Driver)...');
   try {
     cloudClient = createClient({
       url: process.env.TURSO_DATABASE_URL,
       authToken: process.env.TURSO_AUTH_TOKEN || ''
     });
   } catch (err) {
-    console.error('Failed to initialize Turso client:', err);
+    console.error('Failed to initialize Turso HTTP client:', err);
   }
 }
 
@@ -156,7 +158,7 @@ export async function initDb() {
     await queryRun(q);
   }
 
-  console.log('Pairly Database initialized safely.');
+  console.log('Pairly Database initialized safely (Turso HTTP / Serverless).');
 }
 
 export default {
