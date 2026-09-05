@@ -33,12 +33,50 @@ async function loadMemoryFromCloud() {
     if (res.ok) {
       const obj = await res.json();
       const data = obj.data || {};
-      if (Array.isArray(data.users)) memoryStore.users = new Map(data.users);
-      if (Array.isArray(data.conversations)) memoryStore.conversations = new Map(data.conversations);
-      if (Array.isArray(data.messages)) memoryStore.messages = data.messages;
-      if (Array.isArray(data.reactions)) memoryStore.reactions = data.reactions;
-      if (Array.isArray(data.pinned)) memoryStore.pinned = data.pinned;
-      if (Array.isArray(data.links)) memoryStore.links = data.links;
+      if (Array.isArray(data.users)) {
+        for (const [id, user] of data.users) {
+          if (!memoryStore.users.has(id)) {
+            memoryStore.users.set(id, user);
+          }
+        }
+      }
+      if (Array.isArray(data.conversations)) {
+        for (const [id, conv] of data.conversations) {
+          if (!memoryStore.conversations.has(id)) {
+            memoryStore.conversations.set(id, conv);
+          } else {
+            // Merge updated user2_id if linked by another instance
+            const existing = memoryStore.conversations.get(id);
+            if (conv.user2_id && !existing.user2_id) {
+              existing.user2_id = conv.user2_id;
+            }
+          }
+        }
+      }
+      if (Array.isArray(data.messages)) {
+        const existingIds = new Set(memoryStore.messages.map(m => m.id));
+        for (const m of data.messages) {
+          if (!existingIds.has(m.id)) memoryStore.messages.push(m);
+        }
+      }
+      if (Array.isArray(data.reactions)) {
+        const existingIds = new Set(memoryStore.reactions.map(r => r.id));
+        for (const r of data.reactions) {
+          if (!existingIds.has(r.id)) memoryStore.reactions.push(r);
+        }
+      }
+      if (Array.isArray(data.pinned)) {
+        const existingIds = new Set(memoryStore.pinned.map(p => p.id));
+        for (const p of data.pinned) {
+          if (!existingIds.has(p.id)) memoryStore.pinned.push(p);
+        }
+      }
+      if (Array.isArray(data.links)) {
+        const existingIds = new Set(memoryStore.links.map(l => l.id));
+        for (const l of data.links) {
+          if (!existingIds.has(l.id)) memoryStore.links.push(l);
+        }
+      }
     }
   } catch (err) {
     console.warn('Failed to load cloud state:', err.message);
@@ -414,7 +452,7 @@ export async function initDb() {
     await loadMemoryFromCloud();
   }
 
-  console.log('Pairly Database initialized (Turso HTTP Client / Persistent REST Cloud Store).');
+  console.log('Pairly Database initialized (Turso HTTP Client / Merged Persistent REST Cloud Store).');
 }
 
 export default {
