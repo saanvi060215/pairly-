@@ -5,6 +5,7 @@
 
 [functions]
   node_bundler = "esbuild"
+  external_node_modules = ["@libsql/linux-x64-gnu", "@libsql/darwin-x64", "@libsql/win32-x64-msvc", "better-sqlite3"]
 
 [[redirects]]
   from = "/api/setup"
