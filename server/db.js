@@ -1,5 +1,4 @@
 import { createClient } from '@libsql/client/http';
-import { getStore } from '@netlify/blobs';
 
 const isTursoConfigured = Boolean(process.env.TURSO_DATABASE_URL);
 let cloudClient = null;
@@ -24,18 +23,16 @@ let memoryStore = {
   links: []
 };
 
-let blobStore = null;
-try {
-  blobStore = getStore('pairly_db');
-} catch (e) {
-  console.log('Netlify Blobs init note:', e.message);
-}
+const REST_STORE_ID = process.env.REST_STORE_ID || 'ff808181a067127101a071ba10941987';
+const REST_API_URL = `https://api.restful-api.dev/objects/${REST_STORE_ID}`;
 
-async function loadMemoryFromBlobs() {
-  if (cloudClient || !blobStore) return;
+async function loadMemoryFromCloud() {
+  if (cloudClient) return;
   try {
-    const data = await blobStore.get('pairly_state', { type: 'json' });
-    if (data) {
+    const res = await fetch(REST_API_URL);
+    if (res.ok) {
+      const obj = await res.json();
+      const data = obj.data || {};
       if (Array.isArray(data.users)) memoryStore.users = new Map(data.users);
       if (Array.isArray(data.conversations)) memoryStore.conversations = new Map(data.conversations);
       if (Array.isArray(data.messages)) memoryStore.messages = data.messages;
@@ -44,24 +41,31 @@ async function loadMemoryFromBlobs() {
       if (Array.isArray(data.links)) memoryStore.links = data.links;
     }
   } catch (err) {
-    console.warn('Failed to load Netlify Blob state:', err.message);
+    console.warn('Failed to load cloud state:', err.message);
   }
 }
 
-async function saveMemoryToBlobs() {
-  if (cloudClient || !blobStore) return;
+async function saveMemoryToCloud() {
+  if (cloudClient) return;
   try {
-    const data = {
-      users: Array.from(memoryStore.users.entries()),
-      conversations: Array.from(memoryStore.conversations.entries()),
-      messages: memoryStore.messages,
-      reactions: memoryStore.reactions,
-      pinned: memoryStore.pinned,
-      links: memoryStore.links
+    const payload = {
+      name: 'pairly_global_store_v1',
+      data: {
+        users: Array.from(memoryStore.users.entries()),
+        conversations: Array.from(memoryStore.conversations.entries()),
+        messages: memoryStore.messages,
+        reactions: memoryStore.reactions,
+        pinned: memoryStore.pinned,
+        links: memoryStore.links
+      }
     };
-    await blobStore.setJSON('pairly_state', data);
+    await fetch(REST_API_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
   } catch (err) {
-    console.warn('Failed to save Netlify Blob state:', err.message);
+    console.warn('Failed to save cloud state:', err.message);
   }
 }
 
@@ -77,7 +81,7 @@ export async function queryGet(sql, params = []) {
     }
   }
 
-  await loadMemoryFromBlobs();
+  await loadMemoryFromCloud();
 
   const lowerSql = sql.toLowerCase();
   if (lowerSql.includes('from users where user_token =')) {
@@ -130,7 +134,7 @@ export async function queryAll(sql, params = []) {
     }
   }
 
-  await loadMemoryFromBlobs();
+  await loadMemoryFromCloud();
 
   const lowerSql = sql.toLowerCase();
   if (lowerSql.includes('from messages')) {
@@ -191,13 +195,13 @@ export async function queryRun(sql, params = []) {
     }
   }
 
-  await loadMemoryFromBlobs();
+  await loadMemoryFromCloud();
 
   const lowerSql = sql.toLowerCase();
   if (lowerSql.includes('insert into users')) {
     const user = { id: params[0], name: params[1], avatar: params[2], user_token: params[3], is_online: params[4] || 1 };
     memoryStore.users.set(user.id, user);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('update users set name =')) {
@@ -205,7 +209,7 @@ export async function queryRun(sql, params = []) {
     if (u) {
       u.name = params[0];
       u.avatar = params[1];
-      await saveMemoryToBlobs();
+      await saveMemoryToCloud();
     }
     return { changes: 1 };
   }
@@ -214,21 +218,21 @@ export async function queryRun(sql, params = []) {
     if (u) {
       u.is_online = params[0];
       u.last_seen = params[1];
-      await saveMemoryToBlobs();
+      await saveMemoryToCloud();
     }
     return { changes: 1 };
   }
   if (lowerSql.includes('insert into conversations')) {
     const conv = { id: params[0], token_a: params[1], token_b: params[2], user1_id: params[3], user2_id: null };
     memoryStore.conversations.set(conv.id, conv);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('update conversations set user2_id =')) {
     const c = memoryStore.conversations.get(params[1]);
     if (c) {
       c.user2_id = params[0];
-      await saveMemoryToBlobs();
+      await saveMemoryToCloud();
     }
     return { changes: 1 };
   }
@@ -247,7 +251,7 @@ export async function queryRun(sql, params = []) {
       is_read: 0
     };
     memoryStore.messages.push(msg);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('update messages set content =')) {
@@ -255,7 +259,7 @@ export async function queryRun(sql, params = []) {
     if (m) {
       m.content = params[0];
       m.is_edited = 1;
-      await saveMemoryToBlobs();
+      await saveMemoryToCloud();
     }
     return { changes: 1 };
   }
@@ -264,13 +268,13 @@ export async function queryRun(sql, params = []) {
     if (m) {
       m.is_deleted = 1;
       m.content = 'This message was deleted';
-      await saveMemoryToBlobs();
+      await saveMemoryToCloud();
     }
     return { changes: 1 };
   }
   if (lowerSql.includes('delete from messages')) {
     memoryStore.messages = memoryStore.messages.filter(m => m.conversation_id !== params[0]);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('insert into shared_links')) {
@@ -286,12 +290,12 @@ export async function queryRun(sql, params = []) {
       created_at: new Date().toISOString()
     };
     memoryStore.links.push(link);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('delete from shared_links')) {
     memoryStore.links = memoryStore.links.filter(l => l.conversation_id !== params[0]);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('insert into pinned_messages')) {
@@ -303,17 +307,17 @@ export async function queryRun(sql, params = []) {
       pinned_at: new Date().toISOString()
     };
     memoryStore.pinned.push(pin);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('delete from pinned_messages where id =')) {
     memoryStore.pinned = memoryStore.pinned.filter(p => p.id !== params[0]);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('delete from pinned_messages where conversation_id =')) {
     memoryStore.pinned = memoryStore.pinned.filter(p => p.conversation_id !== params[0]);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('insert into reactions')) {
@@ -325,12 +329,12 @@ export async function queryRun(sql, params = []) {
       created_at: new Date().toISOString()
     };
     memoryStore.reactions.push(rxn);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
   if (lowerSql.includes('delete from reactions where id =')) {
     memoryStore.reactions = memoryStore.reactions.filter(r => r.id !== params[0]);
-    await saveMemoryToBlobs();
+    await saveMemoryToCloud();
     return { changes: 1 };
   }
 
@@ -407,10 +411,10 @@ export async function initDb() {
       } catch (e) {}
     }
   } else {
-    await loadMemoryFromBlobs();
+    await loadMemoryFromCloud();
   }
 
-  console.log('Pairly Database initialized (Turso HTTP Client / Netlify Blobs persistent store).');
+  console.log('Pairly Database initialized (Turso HTTP Client / Persistent REST Cloud Store).');
 }
 
 export default {
