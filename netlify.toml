@@ -7,8 +7,20 @@
   node_bundler = "esbuild"
 
 [[redirects]]
+  from = "/api/setup"
+  to = "/.netlify/functions/setup"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/p/:token"
+  to = "/.netlify/functions/resolve"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/api/*"
-  to = "/.netlify/functions/api"
+  to = "/.netlify/functions/api/:splat"
   status = 200
   force = true
 
