@@ -20,7 +20,7 @@ function generatePairTokens() {
   };
 }
 
-async function findOrCreateConversationByToken(token) {
+export async function findOrCreateConversationByToken(token) {
   if (!token) return null;
 
   // 1. Direct DB lookup
