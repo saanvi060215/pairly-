@@ -203,7 +203,8 @@ router.post('/p/:token/join', async (req, res) => {
       user: { id: user.id, name: user.name, avatar: user.avatar },
       userToken,
       shareToken,
-      lanShareUrl: `http://${lanIp}:${port}/p/${shareToken}`
+      shareUrl,
+      lanShareUrl: shareUrl
     });
   } catch (err) {
     console.error('Join endpoint error:', err);
