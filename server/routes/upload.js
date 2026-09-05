@@ -3,17 +3,11 @@ import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { v2 as cloudinary } from 'cloudinary';
 import { authorizeConversationAccess } from '../middleware/auth.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadsDir = path.join(__dirname, '../uploads');
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+const uploadsDir = path.join('/tmp', 'uploads');
 
 const router = express.Router();
 

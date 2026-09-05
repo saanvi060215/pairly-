@@ -1,10 +1,6 @@
 import { createClient } from '@libsql/client';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
 
 let cloudClient = null;
 let localDb = null;
