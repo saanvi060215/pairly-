@@ -2,7 +2,7 @@ import { queryGet } from '../db.js';
 
 export async function authorizeConversationAccess(req, res, next) {
   try {
-    const pairToken = req.headers['x-pair-token'] || req.query.pairToken || req.body.pairToken;
+    const pairToken = req.headers['x-pair-token'] || req.query.pairToken || req.body?.pairToken || req.params?.token;
     const userToken = req.headers['x-user-token'] || req.query.userToken || req.body.userToken;
 
     if (!userToken) {
