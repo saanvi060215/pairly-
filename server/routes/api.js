@@ -11,38 +11,46 @@ function generateId() {
   return crypto.randomUUID();
 }
 
-function generateSecureToken() {
-  return crypto.randomBytes(5).toString('hex'); // 10 hex characters e.g. '7Kx92LmQ'
+function generatePairTokens() {
+  const prefix = crypto.randomBytes(5).toString('hex'); // 10 hex characters e.g. '7k92lmq18f'
+  return {
+    convId: prefix,
+    tokenA: prefix + 'a',
+    tokenB: prefix + 'b'
+  };
 }
 
-function getShareUrl(req, token) {
-  const host = req.headers['x-forwarded-host'] || req.headers.host || 'solofiy.netlify.app';
-  const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
-  return `${proto}://${host}/p/${token}`;
-}
+async function findOrCreateConversationByToken(token) {
+  if (!token) return null;
 
-export function getPrimaryLanIp() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
+  // 1. Direct DB lookup
+  let conversation = await queryGet(
+    'SELECT * FROM conversations WHERE token_a = ? OR token_b = ? OR id = ?',
+    [token, token, token]
+  );
+  if (conversation) return conversation;
+
+  // 2. Deterministic dual-token fallback for cold serverless environments
+  if (token.length === 11 && (token.endsWith('a') || token.endsWith('b'))) {
+    const convId = token.slice(0, 10);
+    const tokenA = convId + 'a';
+    const tokenB = convId + 'b';
+
+    conversation = await queryGet('SELECT * FROM conversations WHERE id = ?', [convId]);
+    if (!conversation) {
+      // Find user1 if exists
+      const dummyUser = await queryGet('SELECT * FROM users LIMIT 1');
+      const user1Id = dummyUser ? dummyUser.id : 'pending_user1';
+      await queryRun(
+        'INSERT INTO conversations (id, token_a, token_b, user1_id) VALUES (?, ?, ?, ?)',
+        [convId, tokenA, tokenB, user1Id]
+      );
+      conversation = await queryGet('SELECT * FROM conversations WHERE id = ?', [convId]);
     }
   }
-  return '127.0.0.1';
-}
 
-// System endpoint to return dynamic LAN IP
-router.get('/system/lan-info', (req, res) => {
-  const lanIp = getPrimaryLanIp();
-  const port = process.env.PORT || 5000;
-  return res.json({
-    lanIp,
-    port,
-    lanBaseUrl: `http://${lanIp}:${port}`
-  });
-});
+  return conversation;
+}
 
 // 1. Setup Profile & Create Permanent Conversation (Dual Token Generation)
 router.post('/setup', async (req, res) => {
@@ -74,17 +82,15 @@ router.post('/setup', async (req, res) => {
       user = await queryGet('SELECT * FROM users WHERE id = ?', [userId]);
     }
 
-    // Generate two unique permanent tokens for Participant A and Participant B
-    const conversationId = generateId();
-    const tokenA = generateSecureToken();
-    const tokenB = generateSecureToken();
+    // Generate deterministic permanent paired tokens for Participant A and Participant B
+    const { convId, tokenA, tokenB } = generatePairTokens();
 
     await queryRun(
       'INSERT INTO conversations (id, token_a, token_b, user1_id) VALUES (?, ?, ?, ?)',
-      [conversationId, tokenA, tokenB, user.id]
+      [convId, tokenA, tokenB, user.id]
     );
 
-    const conversation = await queryGet('SELECT * FROM conversations WHERE id = ?', [conversationId]);
+    const conversation = await queryGet('SELECT * FROM conversations WHERE id = ?', [convId]);
     const shareUrl = getShareUrl(req, tokenB);
 
     return res.json({
@@ -108,17 +114,18 @@ router.post('/setup', async (req, res) => {
 router.get('/p/:token', async (req, res) => {
   try {
     const { token } = req.params;
-    const conversation = await queryGet(
-      'SELECT * FROM conversations WHERE token_a = ? OR token_b = ? OR id = ?',
-      [token, token, token]
-    );
+    const conversation = await findOrCreateConversationByToken(token);
 
     if (!conversation) {
       return res.status(404).json({ error: 'Private space not found. Please check your link.' });
     }
 
-    const user1 = await queryGet('SELECT id, name, avatar, is_online, last_seen FROM users WHERE id = ?', [conversation.user1_id]);
-    const user2 = conversation.user2_id ? await queryGet('SELECT id, name, avatar, is_online, last_seen FROM users WHERE id = ?', [conversation.user2_id]) : null;
+    const user1 = (conversation.user1_id && conversation.user1_id !== 'pending_user1')
+      ? await queryGet('SELECT id, name, avatar, is_online, last_seen FROM users WHERE id = ?', [conversation.user1_id])
+      : null;
+    const user2 = conversation.user2_id
+      ? await queryGet('SELECT id, name, avatar, is_online, last_seen FROM users WHERE id = ?', [conversation.user2_id])
+      : null;
 
     const shareToken = (token === conversation.token_a) ? conversation.token_b : conversation.token_a;
     const shareUrl = getShareUrl(req, shareToken);
@@ -127,7 +134,7 @@ router.get('/p/:token', async (req, res) => {
       conversation,
       user1,
       user2,
-      participantCount: user2 ? 2 : 1,
+      participantCount: (user1 ? 1 : 0) + (user2 ? 1 : 0),
       shareToken,
       shareUrl,
       lanShareUrl: shareUrl
@@ -148,10 +155,7 @@ router.post('/p/:token/join', async (req, res) => {
       return res.status(400).json({ error: 'Display name is required' });
     }
 
-    const conversation = await queryGet(
-      'SELECT * FROM conversations WHERE token_a = ? OR token_b = ? OR id = ?',
-      [token, token, token]
-    );
+    const conversation = await findOrCreateConversationByToken(token);
 
     if (!conversation) {
       return res.status(404).json({ error: 'Private space not found' });
@@ -177,12 +181,13 @@ router.post('/p/:token/join', async (req, res) => {
       await queryRun('UPDATE users SET name = ?, avatar = ? WHERE id = ?', [name.trim(), avatar || user.avatar, user.id]);
     }
 
-    // Link User 2 if slot open
-    if (conversation.user1_id !== user.id && conversation.user2_id !== user.id) {
+    // Link User 1 or User 2 slot
+    if (conversation.user1_id === 'pending_user1' || !conversation.user1_id) {
+      await queryRun('UPDATE conversations SET user1_id = ? WHERE id = ?', [user.id, conversation.id]);
+    } else if (conversation.user1_id !== user.id && conversation.user2_id !== user.id) {
       if (conversation.user2_id !== null) {
         return res.status(403).json({ error: 'This private conversation is limited to 2 participants.' });
       }
-
       await queryRun('UPDATE conversations SET user2_id = ? WHERE id = ?', [user.id, conversation.id]);
     }
 
