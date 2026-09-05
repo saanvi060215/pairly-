@@ -54,12 +54,13 @@ export default function App() {
   // Helper to parse JSON safely
   const parseJsonResponse = async (res, defaultErrorMsg) => {
     const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('application/json')) {
-      throw new Error(
-        'Backend server is not connected. If running locally, access http://localhost:5000 or http://192.168.x.x:5000. If deployed on Netlify, connect a live backend server URL (e.g., Render/Railway).'
-      );
+    let data;
+    if (contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      const text = await res.text();
+      throw new Error(`Server API Error (${res.status}): ${text.slice(0, 100) || 'Unable to connect to Netlify API function'}`);
     }
-    const data = await res.json();
     if (!res.ok) {
       throw new Error(data.error || defaultErrorMsg);
     }
